@@ -1,0 +1,155 @@
+# Install dependencies
+!pip install flask flask-ngrok werkzeug
+
+# Import libraries
+import os
+from flask import Flask, request, redirect, url_for, render_template_string, session, send_from_directory
+from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask_ngrok import run_with_ngrok
+
+# Flask App Setup
+app = Flask(__name__)
+app.secret_key = 'your_secret_key'  # Replace with secure key
+run_with_ngrok(app)
+
+UPLOAD_FOLDER = '/content/uploads'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# In-memory data
+users = {}
+posts = []  # Each post: {'id': int, 'user': str, 'image': filename, 'caption': str, 'likes': int, 'comments': []}
+
+# HTML Templates
+home_template = '''
+<h1>Social Media App</h1>
+{% if 'username' in session %}
+<p>Welcome, {{ session['username'] }} | <a href="/logout">Logout</a></p>
+<form action="/post" method="POST" enctype="multipart/form-data">
+    <p>Image: <input type="file" name="image"></p>
+    <p>Caption: <input name="caption"></p>
+    <input type="submit" value="Post">
+</form>
+{% else %}
+<p><a href="/login">Login</a> | <a href="/register">Register</a></p>
+{% endif %}
+
+<h2>Posts</h2>
+{% for post in posts %}
+<div style="border:1px solid #ccc; padding:10px; margin:10px;">
+    <p><b>{{ post.user }}</b></p>
+    <img src="/uploads/{{ post.image }}" width="200"><br>
+    <p>{{ post.caption }}</p>
+    <p>Likes: {{ post.likes }}
+        {% if 'username' in session %}
+        <a href="/like/{{ post.id }}">❤️ Like</a>
+        {% endif %}
+    </p>
+    <h4>Comments:</h4>
+    <ul>
+        {% for c in post.comments %}
+        <li><b>{{ c.user }}</b>: {{ c.text }}</li>
+        {% endfor %}
+    </ul>
+    {% if 'username' in session %}
+    <form action="/comment/{{ post.id }}" method="POST">
+        <input name="comment" placeholder="Add a comment">
+        <input type="submit" value="Comment">
+    </form>
+    {% endif %}
+</div>
+{% endfor %}
+'''
+
+register_template = '''
+<h2>Register</h2>
+<form method="POST">
+    Username: <input name="username"><br>
+    Password: <input type="password" name="password"><br>
+    <input type="submit" value="Register">
+</form>
+<a href="/login">Login</a>
+'''
+
+login_template = '''
+<h2>Login</h2>
+<form method="POST">
+    Username: <input name="username"><br>
+    Password: <input type="password" name="password"><br>
+    <input type="submit" value="Login">
+</form>
+<a href="/register">Register</a>
+'''
+
+@app.route('/')
+def home():
+    return render_template_string(home_template, posts=posts)
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = generate_password_hash(request.form['password'])
+        if username in users:
+            return "User already exists"
+        users[username] = {'password': password}
+        return redirect(url_for('login'))
+    return render_template_string(register_template)
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        user = users.get(username)
+        if user and check_password_hash(user['password'], password):
+            session['username'] = username
+            return redirect(url_for('home'))
+        return "Invalid credentials"
+    return render_template_string(login_template)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('home'))
+
+@app.route('/post', methods=['POST'])
+def post():
+    if 'username' not in session:
+        return redirect(url_for('login'))
+    file = request.files['image']
+    caption = request.form['caption']
+    if file:
+        filename = secure_filename(file.filename)
+        path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(path)
+        posts.append({
+            'id': len(posts),
+            'user': session['username'],
+            'image': filename,
+            'caption': caption,
+            'likes': 0,
+            'comments': []
+        })
+    return redirect(url_for('home'))
+
+@app.route('/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+@app.route('/like/<int:post_id>')
+def like(post_id):
+    if 'username' in session and 0 <= post_id < len(posts):
+        posts[post_id]['likes'] += 1
+    return redirect(url_for('home'))
+
+@app.route('/comment/<int:post_id>', methods=['POST'])
+def comment(post_id):
+    if 'username' in session and 0 <= post_id < len(posts):
+        text = request.form['comment']
+        posts[post_id]['comments'].append({'user': session['username'], 'text': text})
+    return redirect(url_for('home'))
+
+# Run app
+app.run()
